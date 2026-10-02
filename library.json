@@ -1,0 +1,31 @@
+{
+    "$schema": "https://raw.githubusercontent.com/platformio/platformio-core/develop/platformio/assets/schema/library.json",
+    "version": "1.0.0",
+    "name": "RotaryEncoderIDF",
+    "description": "Rotary Encoder driver for ESP-IDF v6.1",
+    "license": "BSD-3-Clause",
+    "authors":
+    [
+        {
+            "name": "Kitki30",
+            "email": "kitki30@kitki30.com",
+            "maintainer": true
+        },
+        {
+            "name": "Matthias Hertel",
+            "url": "http://www.mathertel.de",
+            "maintainer": false
+        }
+    ],
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/kitki30/rotaryencoderidf"
+    },
+    "keywords": [
+        "rotary-encoder", "esp32",
+        "esp-idf", "encoder",
+        "driver", "tembed"
+    ],
+    "frameworks": ["espidf", "arduino"],
+    "platforms": ["espressif32"]
+}
