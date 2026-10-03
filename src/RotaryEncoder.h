@@ -1,6 +1,6 @@
 // -----
 // RotaryEncoder.h - Library for using rotary encoders.
-// This class is implemented for use with the Arduino environment.
+// This class is implemented for use with the ESP-IDF environment.
 //
 // Copyright (c) by Matthias Hertel, http://www.mathertel.de
 //
@@ -15,16 +15,15 @@
 // 29.01.2021 Options for using rotary encoders with 2 state changes per latch.
 // 06.06.2024 Implementation of tick() with passing the input values for more performant implementations.
 // 21.02.2025 Documentation and Constructor without hardware initialization added.
+// 02.10.2026 Forked and rewrited for ESP-IDF by Kitki30
 // -----
 
-#ifndef RotaryEncoder_h
+#pragma once
 #define RotaryEncoder_h
 
-#include "Arduino.h"
+#include <cstdint>
 
-#ifndef NO_PIN
-#define NO_PIN -1
-#endif
+static void intr_handler(void *params); // Internal easy interrupt handler
 
 class RotaryEncoder {
 public:
@@ -40,9 +39,6 @@ public:
     TWO03 = 3   // 2 steps, Latch at position 0 and 3
   };
 
-  // Constructor that initializes the RotaryEncoder without hardware setup.
-  RotaryEncoder(LatchMode mode = LatchMode::FOUR0);
-
   /**
    * @brief Constructor that initializes the RotaryEncoder with hardware pin setup.
    *
@@ -51,9 +47,7 @@ public:
    * current state to establish the initial encoder position.
    *
    * @param pin1 First encoder pin (typically pin A). Use a value 0 or greater for a valid pin.
-   *             A negative value or NO_PIN will skip hardware configuration.
    * @param pin2 Second encoder pin (typically pin B). Use a value 0 or greater for a valid pin.
-   *             A negative value or NO_PIN will skip hardware configuration.
    * @param mode The latch mode defining the encoder sensitivity.
    *   See RotaryEncoder.h for details on the available modes.
    */
@@ -68,22 +62,21 @@ public:
   // adjust the current position
   void setPosition(long newPosition);
 
-  // call this function every some milliseconds or by using an interrupt for handling state changes of the rotary encoder.
-  // This method uses the standard Arduino digitalRead() function with the 2 pins provided in the class creation.
-  void tick(void);
-
-  // Use this tick variant when a faster method than digitalRead is available and provide the values directly.
-  // The 2 pins provided in the class creation are ignored.
-  void tick(int sig1, int sig2);
-
   // Returns the time in milliseconds between the current observed
   unsigned long getMillisBetweenRotations() const;
 
   // Returns the RPM
   unsigned long getRPM();
 
+  // Get pin config
+  void getPins(int *pin1, int *pin2);
+
+  void tick(int sig1, int sig2); // Set GPIO values, dont use it as this lib handles it itself
+
 private:
-  int _pin1, _pin2;  // Arduino pins used for the encoder.
+  RotaryEncoder(LatchMode mode); // Basic init, turned private in fork
+
+  int _pin1, _pin2;  // Pin numbers used for the encoder.
 
   LatchMode _mode;  // Latch mode from initialization
 
@@ -94,9 +87,5 @@ private:
   volatile long _positionExtPrev;  // External position (used only for direction checking)
 
   unsigned long _positionExtTime;      // The time the last position change was detected.
-  unsigned long _positionExtTimePrev;  // The time the previous position change was detected.
+  unsigned long long _positionExtTimePrev;  // The time the previous position change was detected.
 };
-
-#endif
-
-// End

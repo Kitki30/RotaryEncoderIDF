@@ -1,8 +1,9 @@
 // -----
 // RotaryEncoder.cpp - Library for using rotary encoders.
-// This class is implemented for use with the Arduino environment.
+// This class is implemented for use with the ESP-IDF environment.
 //
 // Copyright (c) by Matthias Hertel, http://www.mathertel.de
+// Copyright (c) by Kitki30, https://www.kitki30.com
 //
 // This work is licensed under a BSD 3-Clause style license,
 // https://www.mathertel.de/License.aspx.
@@ -12,8 +13,15 @@
 // Changelog: see RotaryEncoder.h
 // -----
 
+// TODO: Add better error handling
+// TODO: Refactor comments "my way", current ones look like AI (which it probably is made by)
+
 #include "RotaryEncoder.h"
-#include "Arduino.h"
+
+#include <cstdint>
+#include <algorithm>
+#include "esp_timer.h"
+#include "driver/gpio.h"
 
 #define LATCH0 0  // input state at position 0
 #define LATCH3 3  // input state at position 3
@@ -37,48 +45,41 @@ const int8_t KNOBDIR[] = {
 // <== left,  count down
 
 
+// Easy interrupt handler to integrate with old API
+static void intr_handler(void *params) {
+  // Get RotaryEncoder class from user params
+  RotaryEncoder *encoder = (RotaryEncoder*)params;
+
+  int pin1;
+  int pin2;
+  encoder->getPins(&pin1, &pin2);
+
+  // Read all two pins for less code,
+  // doesnt impact performance too much
+  encoder->tick(
+    gpio_get_level((gpio_num_t)pin1),
+    gpio_get_level((gpio_num_t)pin2)
+  );
+}
+
 // ----- Initialization and Default Values -----
 
-/**
- * @brief Default constructor that initializes the RotaryEncoder with non-hardware specific setup.
- *
- * This constructor creates a RotaryEncoder instance with only software initialization.
- * No pins are configured or reserved. This is useful for scenarios where:
- * - Pins will be managed externally
- * - Hardware-specific tick() will be called with explicit pin values
- * - Deferred or dynamic pin configuration is needed
- *
- * @param mode The latch mode defining the encoder sensitivity.
- *   See RotaryEncoder.h for details on the available modes.
- *
- * Initialization sets:
- * - Encoder mode
- * - Position counter to 0
- * - Internal state variables to initial values (no motion detected)
- * - No pins are reserved (_pin1 and _pin2 set to NO_PIN)
- * - Timestamp tracking for rotation speed calculation
- *
- * @note To use this constructor effectively, call tick(sig1, sig2) with explicit pin values
- *       in your main loop, or use the two-parameter constructor if you need automatic pin handling.
- *
- * @see RotaryEncoder(int pin1, int pin2, LatchMode mode) for hardware-managed pin setup
- * @see tick(int sig1, int sig2) for software-managed pin input
- */
+// Basic init, turned private in the fork
 RotaryEncoder::RotaryEncoder(LatchMode mode) {
   _mode = mode;
 
   // No Hardware specific setup here.
   // use the ...
-  _pin1 = _pin2 = NO_PIN;
+  _pin1 = _pin2 = -1;
 
   // start with position 0;
   _position = 0;
   _oldState = 0;
-  _positionExtPrev = _positionExt = 0;
-  _positionExtTimePrev = _positionExtTime = millis();
-}  // RotaryEncoder()
-
-
+  _positionExtPrev = 0;
+  _positionExt = 0;
+  _positionExtTimePrev = esp_timer_get_time();
+  _positionExtTime = _positionExtTimePrev;
+} 
 
 /**
  * @brief Constructor that initializes the RotaryEncoder with hardware pin setup.
@@ -95,16 +96,11 @@ RotaryEncoder::RotaryEncoder(LatchMode mode) {
  *   See RotaryEncoder.h for details on the available modes.
  *
  * Hardware Setup:
- * - Configures both pins as INPUT_PULLUP for reliable signal detection
- * - Reads the initial state of pin1 and pin2 using digitalRead()
+ * - Configures both pins with internal pull-up resistors for reliable signal detection
+ * - Reads the initial state of pin1 and pin2 using gpio_get_level()
  * - Establishes the initial position based on current pin values
  * - Stores pin numbers for use with the non-parameterized tick() method
- *
- * Interrupt-Safe Usage:
- * This constructor is suitable for both polling and interrupt-driven modes:
- * - For polling: call tick() periodically in your main loop
- * - For interrupts: attach interrupt handlers to these pins and call tick(sig1, sig2)
- *                   from the interrupt handler with explicit pin values for better performance
+ * - Sets up interrupts for it to be faster and non-blocking
  *
  * Initial State:
  * - Position counter initialized to 0
@@ -113,9 +109,6 @@ RotaryEncoder::RotaryEncoder(LatchMode mode) {
  *
  * @note If both pins are negative or not in the valid range [0, MAX_PIN], the hardware
  *       setup is skipped but the encoder still initializes with software defaults.
- * @note The pins must support INPUT_PULLUP mode on your microcontroller.
- * @note For maximum interrupt responsiveness, consider using the parameterized tick(sig1, sig2)
- *       variant and reading pins directly in your interrupt handler.
  */
 RotaryEncoder::RotaryEncoder(int pin1, int pin2, LatchMode mode) : RotaryEncoder(mode) {
   int sig1 = 0;
@@ -126,22 +119,26 @@ RotaryEncoder::RotaryEncoder(int pin1, int pin2, LatchMode mode) : RotaryEncoder
   _pin2 = pin2;
 
   // Setup the input pins and turn on pullup resistor
-  if ((pin1 >= 0) && (pin2 >= 0)) {
-    pinMode(pin1, INPUT_PULLUP);
-    pinMode(pin2, INPUT_PULLUP);
-    // when not started in motion, the current state of the encoder should be 3
-    sig1 = digitalRead(_pin1);
-    sig2 = digitalRead(_pin2);
-  }
+  gpio_config_t gpio_cfg = {
+    .pin_bit_mask = (1ULL << pin1 | 1ULL << pin2),
+    .mode = GPIO_MODE_INPUT,
+    .pull_up_en = GPIO_PULLUP_ENABLE,
+    .pull_down_en = GPIO_PULLDOWN_ENABLE,
+    .intr_type = GPIO_INTR_ANYEDGE
+  };
+
+  gpio_config(&gpio_cfg);
+
+  // when not started in motion, the current state of the encoder should be 3
+  sig1 = gpio_get_level((gpio_num_t)_pin1);
+  sig2 = gpio_get_level((gpio_num_t)_pin2);
+
+  // Attach interrupts
+  gpio_isr_handler_add((gpio_num_t)_pin1, intr_handler, (void*)this);
+  gpio_isr_handler_add((gpio_num_t)_pin2, intr_handler, (void*)this);
 
   _oldState = sig1 | (sig2 << 1);
 }  // RotaryEncoder()
-
-
-long RotaryEncoder::getPosition() {
-  return _positionExt;
-}  // getPosition()
-
 
 RotaryEncoder::Direction RotaryEncoder::getDirection() {
   RotaryEncoder::Direction ret = Direction::NOROTATION;
@@ -160,6 +157,9 @@ RotaryEncoder::Direction RotaryEncoder::getDirection() {
   return ret;
 }
 
+long RotaryEncoder::getPosition() {
+  return _positionExt;
+} 
 
 void RotaryEncoder::setPosition(long newPosition) {
   switch (_mode) {
@@ -182,17 +182,10 @@ void RotaryEncoder::setPosition(long newPosition) {
 }  // setPosition()
 
 
-// Slow, but Simple Variant by directly Read-Out of the Digital State within loop-call
-void RotaryEncoder::tick(void) {
-  int sig1 = digitalRead(_pin1);
-  int sig2 = digitalRead(_pin2);
-  tick(sig1, sig2);
-}  // tick()
 
-
-// When a faster method than digitalRead is available you can _tick with the 2 values directly.
+// Updates signals to new values
 void RotaryEncoder::tick(int sig1, int sig2) {
-  unsigned long now = millis();
+  unsigned long now = esp_timer_get_time();
   int8_t thisState = sig1 | (sig2 << 1);
 
   if (_oldState != thisState) {
@@ -238,10 +231,16 @@ unsigned long RotaryEncoder::getMillisBetweenRotations() const {
 unsigned long RotaryEncoder::getRPM() {
   // calculate max of difference in time between last position changes or last change and now.
   unsigned long timeBetweenLastPositions = _positionExtTime - _positionExtTimePrev;
-  unsigned long timeToLastPosition = millis() - _positionExtTime;
-  unsigned long t = max(timeBetweenLastPositions, timeToLastPosition);
+  unsigned long timeToLastPosition = esp_timer_get_time() - _positionExtTime;
+  unsigned long t = std::max(timeBetweenLastPositions, timeToLastPosition);
   return 60000.0 / ((float)(t * 20));
 }
 
+// Get pins that RotaryEncoder is initialized with in an array
+// Use this if you want your own interrupts
+void RotaryEncoder::getPins(int *pin1, int *pin2) {
+  *pin1 = _pin1;
+  *pin2 = _pin2;
+}
 
 // End
