@@ -4,6 +4,14 @@ Fork of mathertel's RotaryEncoder library to work with ESP-IDF
 
 Made for IDF v6.1, not sure if it works with versions below that.
 
+## Installation
+### Install using platformio
+Add the code below to your platformio.ini to install the libary:
+```ini
+lib_deps =
+    kitki30/RotaryEncoderIDF@^1.0.0
+```
+
 ## API Guide
 API Varies a lot from the original, the driver does everything without you refreshing it.
 It also sets up the interrupts for you, just make sure you installed the isr handler before with ``gpio_isr_handler_add()``
